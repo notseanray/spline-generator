@@ -23,7 +23,7 @@ module.exports = {
           TextEncoder: ['text-encoding', 'TextEncoder']
         })
     ],
-    mode: 'release',
+    mode: 'production',
     experiments: {
         asyncWebAssembly: true
    }

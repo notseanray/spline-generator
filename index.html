@@ -8,7 +8,7 @@
   <body>
       <div class="controls">
         <div>
-          <p>constraint number, position (x & y), velocity (x & y)</p>
+          <h1>constraint number, position (x & y), velocity (x & y)</h1>
           <pre>Example:
             0 (0, 0) (1, 1)
             1 (-2,2) -1 -1 // spacing and delimeters are optional
@@ -17,11 +17,17 @@
           <p>After 8 or so terms the equation breaks down, soon I'm going to make it split into multiple splines after 7-8 terms</p>
           <div id="error_message"></div>
           <textarea rows="10" cols="100" name="text" id="real">
-0 (0, 0)
-1 (-2,2)
-2 -1, 0
+0 (0, 0) (1, 1)
+1 (-2,2) -1 -1
+2 -1, 0 3 2
+3 -4, 1 4 2
           </textarea>
         </div>
+        <h2>generated x & y matrix after row reduction</h2>
+        <pre>
+            <div id="matrix_x"></div>
+            <div id="matrix_y"></div>
+        </pre>
         <div style="display: flex; align-items: center;">
             <button class="button-primary" id="calc">calc</button>
             <input type="number" id="ftrim" min="1" max="15" step="1" value="5"></input>
@@ -44,6 +50,7 @@
             <div id="y_list"></div>
         </div>
       </div>
+      <h2>parametric graph</h2>
   </body>
   <div id="calcparent">
       <div id="calculator" style="left: 0; width: 99vw; height: 80vh; position: absolute;"></div>

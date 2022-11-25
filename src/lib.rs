@@ -1,6 +1,7 @@
 use std::io::Error;
 use wasm_bindgen::prelude::*;
 
+// generate list of t power values based on the step and stop given
 #[wasm_bindgen]
 pub fn generate_list(equation: Vec<f32>, step: f32, t_stop: u32, max_list: u32) -> Vec<f32> {
     let max_list = max_list as usize;
@@ -9,7 +10,9 @@ pub fn generate_list(equation: Vec<f32>, step: f32, t_stop: u32, max_list: u32) 
     while t < t_stop as f32 && list.len() < max_list {
         let mut v = 0.0;
         for (i, poly) in equation.iter().enumerate() {
-            if i == 0 { continue; }
+            if i == 0 {
+                continue;
+            }
             v += poly * t.powf(i as f32);
         }
         list.push(v);
@@ -18,19 +21,28 @@ pub fn generate_list(equation: Vec<f32>, step: f32, t_stop: u32, max_list: u32) 
     list
 }
 
-type Spline = (Vec<Vec<f32>>, Vec<f32>);
 #[wasm_bindgen]
 pub fn generate_equation(data: String) -> Vec<f32> {
-    let data = Csv::from_str(data).unwrap();
-    // this is not the actual size we need
+    // take in csv formatted string and parse
+    let Ok(data) = Csv::from_str(&data) else {
+        // if it fails don't crash just return nothing
+        return vec![];
+    };
+    // determine rough number of constraints, we are going to recheck this after filtering out
+    // potentially invalid constraints
     let constraint_size = data.constraint_size().unwrap_or(0);
-    let velocity = data.columns.contains(&"velocity".to_string());
+    // if we have velocity at all then we know to filter out constraints that don't have velocity
+    let velocity = data.columns.contains(&"velocity");
+    // separate the data into the x and y components
     let (x, y) = data.split();
     let mut uv = Vec::with_capacity(constraint_size);
+    // keep track of the longest row, if any are shorter don't include them as they're invalid
+    // constraints
     let mut max_len = 0;
     let mut initial_pass = true;
     for r in &x.rows {
         let rl = r.len();
+        // if the length changes and it's not the first pass clear out all the previous constraints
         if rl > max_len {
             if !initial_pass && rl < max_len {
                 uv.clear();
@@ -38,61 +50,85 @@ pub fn generate_equation(data: String) -> Vec<f32> {
             max_len = r.len();
         }
         initial_pass = true;
+        // if it's shorter than the max_length then we can skip it
         if rl < max_len {
             continue;
         }
         if let Some(v) = r.first() {
             let v = *v as i32;
-            // we always calc 0 anyway
+            // we always calcluate u = 0 value for constraints, so skip it
             if v <= 0 {
                 continue;
             }
             uv.push(v);
         }
     }
+    // this is the actual constraint size
     let constraint_size = uv.len();
+    // if we are calculating velocity we'll have 2 times the rows of the constraint size (add 1 because
+    // we also have to add a col for the answer for the system of equations) otherwise we don't
+    // care about the velocity
     let matrix_dim = (constraint_size + 1) * if velocity { 2 } else { 1 };
     // compute the intial constraints for position and velocity
+    // these are always the same beside the length
     let mut constraint_pos = vec![vec![1.0]];
     constraint_pos[0].append(&mut vec![0.0; matrix_dim - 1]);
     let mut constraint_vel = vec![vec![0.0, 1.0]];
     constraint_vel[0].append(&mut vec![0.0; matrix_dim - 2]);
-    // we always solve u0 so start from u1..
+    // we always compute u = 0 so we previously filtered out u <= 0, so this starts from u1..
     for u in uv {
         let mut pos_row = Vec::with_capacity(matrix_dim);
         let mut vel_row = Vec::with_capacity(matrix_dim);
         for col in 0..(matrix_dim as i32) {
+            // vel is derivative of pos
             pos_row.push(u.pow(col as u32) as f32);
             vel_row.push((col * (u.pow((col - 1).try_into().unwrap_or(0)))) as f32);
         }
         constraint_pos.push(pos_row);
         constraint_vel.push(vel_row);
     }
+    // unfortunately have to clone here, otherwise it would mutate the same matrix when row
+    // reducing which is not what we want
     let mut res = row_reduce(
         &mut constraint_pos.clone(),
         &mut constraint_vel.clone(),
         &x.rows,
         velocity,
-    )
-    .1;
-    res.append(&mut row_reduce(&mut constraint_pos, &mut constraint_vel, &y.rows, velocity).1);
+        "matrix_x",
+    );
+    let mut y = row_reduce(
+        &mut constraint_pos,
+        &mut constraint_vel,
+        &y.rows,
+        velocity,
+        "matrix_y",
+    );
+    res.append(&mut y);
     res
 }
 
 type M = Vec<Vec<f32>>;
 
+#[inline]
 fn scale(row: &mut [f32], scale: f32) {
     for v in row.iter_mut() {
         *v *= scale;
     }
 }
 
-fn add(dst: &mut [f32], src: &[f32], value: f32) {
-    for (i, v) in dst.iter_mut().enumerate() {
-        *v += src[i] * value;
+// to reduce the need of clone on certain rows we can do a little unsafe :)
+#[inline]
+fn add(dst: *mut f32, src: *const f32, value: f32, dst_len: usize) {
+    unsafe {
+        for i in 0..dst_len {
+            *dst.add(i) += *src.add(i) * value;
+        }
     }
 }
 
+// find the pivot point, if there is none then we the matrix is not useful to us and should just
+// crash
+#[inline]
 fn pivot(m: &M, row: usize) -> usize {
     for (i, v) in m[row].iter().enumerate() {
         if v != &0.0 {
@@ -102,6 +138,7 @@ fn pivot(m: &M, row: usize) -> usize {
     panic!("no pivot")
 }
 
+#[inline]
 fn row_of_col(m: &M, col: usize) -> Option<usize> {
     let mut rows = vec![];
     for i in 0..m.len() - 1 {
@@ -112,15 +149,17 @@ fn row_of_col(m: &M, col: usize) -> Option<usize> {
     rows.first().copied()
 }
 
-fn row_reduce(pos: &mut M, vel: &mut M, direction: &M, velocity: bool) -> Spline {
+fn row_reduce(pos: &mut M, vel: &mut M, direction: &M, velocity: bool, dir_name: &str) -> Vec<f32> {
     let max_len = direction.len();
-    // add constraint columns
+    // add constraint columns/answers for system of equations
     for (i, v) in pos.iter_mut().enumerate() {
         if i >= max_len {
             break;
         }
         v.push(direction[i][1]);
     }
+    // if the velocity is added then we add those rows, since you don't always have to put velocity
+    // we gotta check if it's in bounds to prevent panic
     if velocity {
         for (i, v) in vel.iter_mut().enumerate() {
             if i >= max_len || direction[i].len() < 3 {
@@ -130,7 +169,29 @@ fn row_reduce(pos: &mut M, vel: &mut M, direction: &M, velocity: bool) -> Spline
         }
         pos.append(vel);
     }
-    let generated = pos.clone();
+    // grab dom element and display matrix if it actually exists
+    if let Some(w) = web_sys::window() {
+        if let Some(val) = w.document() {
+            if let Some(val) = val.get_element_by_id(dir_name) {
+                val.set_text_content(Some(
+                    &pos.iter()
+                        .map(|x| {
+                            // padded format to hopefully make it more readable
+                            format!(
+                                "[{}]",
+                                x.iter()
+                                    .map(|x| format!("{:>2}", x))
+                                    .collect::<Vec<String>>()
+                                    .join(", ")
+                            )
+                        })
+                        .collect::<Vec<String>>()
+                        .join("\n"),
+                ));
+            }
+        }
+    }
+    // start at first row and perform rref
     for c in 0..pos[0].len() - 1 {
         let pivot = pivot(pos, c);
         let scale_value = pos[c][pivot];
@@ -140,10 +201,15 @@ fn row_reduce(pos: &mut M, vel: &mut M, direction: &M, velocity: bool) -> Spline
                 continue;
             }
             let add_value = pos[r][pivot];
-            let pos_c = pos[c].clone();
-            add(&mut pos[r], &pos_c, -add_value);
+            // fancy pointer stuff to prevent cloning row c when adding, we aren't accessing the
+            // same Vec in memory because of the previous continue statement, so it's safe (enough)
+            let len = pos[r].len();
+            let pos_c = pos[c].as_ptr();
+            // add the negative
+            add(pos[r].as_mut_ptr(), pos_c, -add_value, len);
         }
     }
+    // go back and forth with row swaping
     let mut row_pos = 0;
     for c in 0..pos[0].len() - 1 {
         let Some(v) = row_of_col(pos, c) else {
@@ -152,26 +218,27 @@ fn row_reduce(pos: &mut M, vel: &mut M, direction: &M, velocity: bool) -> Spline
         pos.swap(v, row_pos);
         row_pos += 1;
     }
-    // print answers
-    (
-        generated,
-        pos.iter().filter_map(|x| x.last()).copied().collect(),
-    )
+    // return the last values of the rows as they're the answer to the system of equations
+    pos.iter().filter_map(|x| x.last()).copied().collect()
 }
 
-struct Csv<T> {
-    pub columns: Vec<String>,
+struct Csv<'a, T> {
+    pub columns: Vec<&'a str>,
     pub rows: Vec<Vec<T>>,
 }
 
-impl Csv<(f32, f32)> {
-    pub fn from_str(data: String) -> Result<Self, Error> {
-        let mut columns: Vec<String> = vec![];
+// this is terrible, but basically take the poorly done csv file and attempt to parse it, it
+// expects that you have "(x, y)" for Vec and Point coords (because csv requires that values with a
+// coma be wrapped in quotes), this jankily takes care of that by spliting at ," for every row
+// except the first (since that is col name)
+impl<'a> Csv<'a, (f32, f32)> {
+    pub fn from_str(data: &'a str) -> Result<Self, Error> {
+        let mut columns: Vec<&str> = vec![];
         let mut rows: Vec<Vec<(f32, f32)>> = vec![];
         for (i, line) in data.lines().enumerate() {
             // first line take out the col names
             if i == 0 {
-                columns = line.split(',').map(|x| x.to_string()).collect();
+                columns = line.split(',').collect();
                 continue;
             }
             let line: Vec<(f32, f32)> = line
@@ -205,26 +272,21 @@ impl Csv<(f32, f32)> {
         Ok(Self { columns, rows })
     }
 
+    #[inline]
     pub fn constraint_size(&self) -> Option<usize> {
-        let Some(v) = self.rows.last() else {
-            return None;
-        };
-        let Some(v) = v.first() else {
-            return None;
-        };
-        Some(v.0 as usize)
+        Some(self.rows.len() - 1)
     }
 
-    pub fn split(self) -> (Csv<f32>, Csv<f32>) {
+    pub fn split(self) -> (Csv<'a, f32>, Csv<'a, f32>) {
         let clen = self.columns.len();
         let rlen = self.rows.len();
-        // can potentially remove alloc here by returning 'a csv struct
+        // we don't need the cols so we can just omit them
         let mut x = Csv {
-            columns: self.columns.clone(),
+            columns: vec![],
             rows: vec![Vec::with_capacity(clen); rlen],
         };
         let mut y = Csv {
-            columns: self.columns,
+            columns: vec![],
             rows: vec![Vec::with_capacity(clen); rlen],
         };
         for (i, row) in self.rows.iter().enumerate() {
