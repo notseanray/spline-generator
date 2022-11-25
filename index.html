@@ -1,0 +1,51 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/dark.css">
+    <link rel="stylesheet" href="./index.css">
+    <script src="https://www.desmos.com/api/v1.7/calculator.js?apiKey=dcb31709b452b1cf9dc26972add0fda6"></script>
+  </head>
+  <body>
+      <div class="controls">
+        <div>
+          <p>constraint number, position (x & y), velocity (x & y)</p>
+          <pre>Example:
+            0 (0, 0) (1, 1)
+            1 (-2,2) -1 -1 // spacing and delimeters are optional
+            2 -1, 0 3 2 // comments with double slashes are supported
+          </pre>
+          <p>After 8 or so terms the equation breaks down, soon I'm going to make it split into multiple splines after 7-8 terms</p>
+          <div id="error_message"></div>
+          <textarea rows="10" cols="100" name="text" id="real">
+0 (0, 0)
+1 (-2,2)
+2 -1, 0
+          </textarea>
+        </div>
+        <div style="display: flex; align-items: center;">
+            <button class="button-primary" id="calc">calc</button>
+            <input type="number" id="ftrim" min="1" max="15" step="1" value="5"></input>
+            <p>decimal places </p>
+            <div style="padding-left: 10px; display: flex;">
+                <p>took: </p>
+            </div>
+            <div style="padding-left: 5px; display: flex;">
+                <div id="time">0</div> ms
+            </div>
+            <input type="number" id="tstep" min="0.0001" max="10" step="0.1" value="0.2"></input>
+            <p>t step </p>
+            <button class="button-primary" id="calc_list">calc list</button>
+            <input type="number" id="tatm" min="1" max="2000" step="1" value="100"></input>
+            <p>t amount</p>
+        </div>
+        <div>
+            <div id="x_list"></div>
+            <br />
+            <div id="y_list"></div>
+        </div>
+      </div>
+  </body>
+  <div id="calcparent">
+      <div id="calculator" style="left: 0; width: 99vw; height: 80vh; position: absolute;"></div>
+  </div>
+</html>
